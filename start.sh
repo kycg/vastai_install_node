@@ -19,12 +19,7 @@ NODES=(
     #"https://github.com/ltdrdata/ComfyUI-Manager"
     #"https://github.com/cubiq/ComfyUI_essentials"
   	  "https://github.com/kycg/comfyui-Lora-auto-downloader"
-      "https://github.com/crystian/ComfyUI-Crystools"
-        "https://github.com/XLabs-AI/x-flux-comfyui"
-  	"https://github.com/pythongosssss/ComfyUI-Custom-Scripts"
-  	"https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes"
-  	"https://github.com/valofey/Openrouter-Node"
-  	"https://github.com/WASasquatch/was-node-suite-comfyui"
+
 )
 
 WORKFLOWS=(

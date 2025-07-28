@@ -2,103 +2,142 @@
 set -euo pipefail
 
 # =============================================================================
-# One‑stop ComfyUI installer + FP8 models (parallel in tmux windows)
+# Vast.ai provisioning script — ComfyUI custom nodes + FP8 models (multi-threaded)
 # =============================================================================
 
-# -- Configuration ------------------------------------------------------------
-INSTALL_DIR="${INSTALL_DIR:-/workspace/ComfyUI}"
-SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+# 1) Activate virtualenv
+source /venv/main/bin/activate
 
-# -- Dependency installation --------------------------------------------------
-install_deps() {
-  echo "==> Installing system dependencies..."
-  apt update
-  apt install -y git python3-pip aria2 dos2unix tmux
-}
+# 2) ComfyUI install directory
+COMFYUI_DIR="${WORKSPACE}/ComfyUI"
 
-# -- ComfyUI node list --------------------------------------------------------
+# 3) APT & PIP packages
+APT_INSTALL=${APT_INSTALL:-"apt update && apt install -y"}
+APT_PACKAGES=(
+    git
+    python3-pip
+    aria2
+    dos2unix
+)
+PIP_PACKAGES=(
+    # add any global pip deps here, e.g. sentencepiece, transformers…
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4) Node lists
 BASE_NODES=(
-  "https://github.com/kycg/comfyui-Lora-auto-downloader"
-  "https://github.com/crystian/ComfyUI-Crystools"
-  "https://github.com/XLabs-AI/x-flux-comfyui"
-  "https://github.com/city96/ComfyUI-GGUF"
+    "https://github.com/kycg/comfyui-Lora-auto-downloader"
+    "https://github.com/crystian/ComfyUI-Crystools"
+    "https://github.com/XLabs-AI/x-flux-comfyui"
+    "https://github.com/city96/ComfyUI-GGUF"
 )
 ENHANCED_NODES=(
-  "https://github.com/pythongosssss/ComfyUI-Custom-Scripts"
-  "https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes"
-  "https://github.com/valofey/Openrouter-Node"
-  "https://github.com/WASasquatch/was-node-suite-comfyui"
+    "https://github.com/pythongosssss/ComfyUI-Custom-Scripts"
+    "https://github.com/Suzie1/ComfyUI_Comfyroll_CustomNodes"
+    "https://github.com/valofey/Openrouter-Node"
+    "https://github.com/WASasquatch/was-node-suite-comfyui"
 )
 
-download_nodes() {
-  echo "==> [nodes] Installing/updating ComfyUI custom nodes..."
-  mkdir -p "$INSTALL_DIR/custom_nodes"
-  for repo in "${BASE_NODES[@]}" "${ENHANCED_NODES[@]}"; do
-    name=$(basename "$repo")
-    dest="$INSTALL_DIR/custom_nodes/$name"
-    if [[ -d "$dest" ]]; then
-      echo "→ Updating node: $name"
-      git -C "$dest" pull --ff-only || echo "⚠️  Failed to update $name, continuing..."
-    else
-      echo "→ Cloning node: $name"
-      git clone --depth 1 "$repo" "$dest" || { echo "⚠️  Clone failed for $name, skipping."; continue; }
-    fi
-    if [[ -f "$dest/requirements.txt" ]]; then
-      echo "   Installing deps for $name"
-      pip install --no-cache-dir -r "$dest/requirements.txt" \
-        || echo "⚠️  Pip install failed for $name, skipping deps."
-    fi
-  done
-  echo "✅  [nodes] Complete."
-}
-
-# -- FP8 model list -----------------------------------------------------------
-declare -A MODELS=(
-  ["$INSTALL_DIR/models/loras/FLUX.1-Turbo-Alpha.safetensors"]="https://huggingface.co/alimama-creative/FLUX.1-Turbo-Alpha/resolve/main/diffusion_pytorch_model.safetensors?download=true"
-  ["$INSTALL_DIR/models/clip/clip_l.safetensors"]="https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors?download=true"
-  ["$INSTALL_DIR/models/vae/flux-ae.safetensors"]="https://huggingface.co/foxmail/flux_vae/resolve/main/ae.safetensors?download=true"
-  ["$INSTALL_DIR/models/unet/flux1-dev-fp8-e4m3fn.safetensors"]="https://huggingface.co/Kijai/flux-fp8/resolve/main/flux1-dev-fp8-e4m3fn.safetensors?download=true"
-  ["$INSTALL_DIR/models/clip/t5xxl_fp8_e4m3fn.safetensors"]="https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors?download=true"
-  ["$INSTALL_DIR/models/unet/flux1-fill-dev-Q5_K_S.gguf"]="https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/main/flux1-fill-dev-Q5_K_S.gguf"
+# 5) FP8 model URLs
+declare -A FP8_MODELS=(
+    ["loras/FLUX.1-Turbo-Alpha.safetensors"]="https://huggingface.co/alimama-creative/FLUX.1-Turbo-Alpha/resolve/main/diffusion_pytorch_model.safetensors?download=true"
+    ["clip/clip_l.safetensors"]="https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors?download=true"
+    ["vae/flux-ae.safetensors"]="https://huggingface.co/foxmail/flux_vae/resolve/main/ae.safetensors?download=true"
+    ["unet/flux1-dev-fp8-e4m3fn.safetensors"]="https://huggingface.co/Kijai/flux-fp8/resolve/main/flux1-dev-fp8-e4m3fn.safetensors?download=true"
+    ["clip/t5xxl_fp8_e4m3fn.safetensors"]="https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors?download=true"
+    ["unet/flux1-fill-dev-Q5_K_S.gguf"]="https://huggingface.co/YarvixPA/FLUX.1-Fill-dev-GGUF/resolve/main/flux1-fill-dev-Q5_K_S.gguf"
 )
 
-download_models() {
-  echo "==> [models] Downloading FP8 model set (16 threads each file)..."
-  for dest in "${!MODELS[@]}"; do
-    url=${MODELS[$dest]}
-    dir=$(dirname "$dest")
-    file=$(basename "$dest")
-    mkdir -p "$dir"
-    if [[ -f "$dest" ]]; then
-      echo "→ Skipping existing: $file"
-    else
-      echo "→ Downloading $file"
-      aria2c -x16 -s16 -d "$dir" -o "$file" "$url" \
-        || echo "⚠️  Failed to download $file"
-    fi
-  done
-  echo "✅  [models] Complete."
+# =============================================================================
+# Helpers
+# =============================================================================
+
+function print_header() {
+    cat << 'EOF'
+
+##############################################
+#                                            #
+#          Provisioning container            #
+#                                            #
+#         This will take some time           #
+#                                            #
+# Your container will be ready on completion #
+#                                            #
+##############################################
+
+EOF
 }
 
-# -- Main control flow --------------------------------------------------------
-case "${1:-}" in
-  nodes)
-    download_nodes
-    exit 0
-    ;;
-  models)
-    download_models
-    exit 0
-    ;;
-  *)
-    install_deps
-    echo "==> Launching tmux session 'comfy_setup' with two windows..."
-    # Start tmux session
-    tmux new-session -d -s comfy_setup -n nodes \
-      "bash -lc '${SCRIPT_PATH} nodes; exec bash'"
-    tmux new-window -t comfy_setup:1 -n models \
-      "bash -lc '${SCRIPT_PATH} models; exec bash'"
-    echo "Attach with: tmux attach -t comfy_setup"
-    tmux attach -t comfy_setup
-    ;;
-esac
+function print_end() {
+    echo -e "\n✅ Provisioning complete."
+}
+
+# Install APT packages
+function install_apt() {
+    echo "==> Installing APT packages: ${APT_PACKAGES[*]}"
+    sudo ${APT_INSTALL} "${APT_PACKAGES[@]}"
+}
+
+# Install PIP packages
+function install_pip() {
+    if (( ${#PIP_PACKAGES[@]} )); then
+        echo "==> Installing PIP packages: ${PIP_PACKAGES[*]}"
+        pip install --no-cache-dir "${PIP_PACKAGES[@]}"
+    fi
+}
+
+# Clone or update nodes
+function download_nodes() {
+    mkdir -p "${COMFYUI_DIR}/custom_nodes"
+    for repo in "${@}"; do
+        name=$(basename "$repo")
+        dest="${COMFYUI_DIR}/custom_nodes/${name}"
+        if [[ -d "$dest" ]]; then
+            echo "→ Updating node: $name"
+            git -C "$dest" pull --ff-only || echo "⚠️  update failed: $name"
+        else
+            echo "→ Cloning node: $name"
+            git clone --depth 1 "$repo" "$dest" || { echo "⚠️  clone failed: $name"; continue; }
+        fi
+        if [[ -f "$dest/requirements.txt" ]]; then
+            echo "   Installing deps for $name"
+            pip install --no-cache-dir -r "$dest/requirements.txt" \
+                || echo "⚠️  pip install failed: $name"
+        fi
+    done
+}
+
+# Wrapper for download_nodes
+function get_nodes() {
+    echo "==> Installing/updating ComfyUI custom nodes..."
+    download_nodes "${BASE_NODES[@]}" "${ENHANCED_NODES[@]}"
+    echo "✅ Nodes done."
+}
+
+# Multi-threaded download via aria2c
+function download_fp8_models() {
+    echo "==> Downloading FP8 models (16× threads)..."
+    for subpath in "${!FP8_MODELS[@]}"; do
+        url="${FP8_MODELS[$subpath]}"
+        dir="${COMFYUI_DIR}/models/${subpath%/*}"
+        mkdir -p "$dir"
+        filename=$(basename "${subpath}")
+        echo "→ $filename"
+        aria2c -x16 -s16 -d "$dir" -o "$filename" "$url" \
+            || echo "⚠️  failed: $filename"
+    done
+    echo "✅ FP8 models done."
+}
+
+# =============================================================================
+# Main
+# =============================================================================
+
+if [[ ! -f /.noprovisioning ]]; then
+    print_header
+    install_apt
+    get_nodes
+    install_pip
+    download_fp8_models
+    print_end
+fi

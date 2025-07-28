@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # =============================================================================
-# Vast.ai provisioning script — installs ComfyUI custom nodes + FP8 models
+# Vast.ai provisioning script — ComfyUI custom nodes + FP8 models (multi-threaded)
 # =============================================================================
 
 # 1) Activate Python venv
@@ -12,21 +12,31 @@ source /venv/main/bin/activate
 COMFYUI_DIR="${WORKSPACE}/ComfyUI"
 CUSTOM_NODES_DIR="${COMFYUI_DIR}/custom_nodes"
 
-# 3) System packages
-echo "==> Updating APT and installing system packages..."
-sudo apt-get update -y
-sudo apt-get install -y git python3-pip aria2 dos2unix
-
-# 4) Python packages
-echo "==> Installing Python packages..."
-pip install --no-cache-dir \
-  sentencepiece piexif matplotlib segment-anything scikit-image \
-  transformers opencv-python-headless GitPython \
-  "scipy>=1.11.4" "dlib==19.22.0" \
-  insightface onnxruntime facexlib
+# 3) Ensure non‑interactive apt
+export DEBIAN_FRONTEND=noninteractive
 
 # =============================================================================
-# 5) Install / update ComfyUI custom nodes
+# 4) System prerequisites
+# =============================================================================
+echo "==> Updating APT and installing base packages..."
+apt-get update -y
+apt-get install -y \
+    git python3-pip aria2 dos2unix cmake build-essential python3-dev
+
+# =============================================================================
+# 5) Python packages (ignore failures for dlib)
+# =============================================================================
+echo "==> Installing Python packages..."
+pip install --no-cache-dir \
+    sentencepiece piexif matplotlib segment-anything scikit-image \
+    transformers opencv-python-headless GitPython \
+    scipy>=1.11.4 || echo "⚠️  Some packages failed (continuing)"
+
+# Attempt to install dlib but don't fail the script if it errors
+pip install --no-cache-dir dlib==19.22.0 || echo "⚠️  dlib install failed (skipping)"
+
+# =============================================================================
+# 6) Install / update ComfyUI custom nodes
 # =============================================================================
 echo "==> Installing/updating ComfyUI custom nodes..."
 BASE_NODES=(
@@ -54,17 +64,17 @@ for repo in "${BASE_NODES[@]}" "${ENHANCED_NODES[@]}"; do
     git clone --depth 1 "$repo" "$dest" || { echo "⚠️  clone failed: $name"; continue; }
   fi
   if [[ -f "$dest/requirements.txt" ]]; then
-    echo "   Installing Python deps for $name"
+    echo "   Installing deps for $name"
     pip install --no-cache-dir -r "$dest/requirements.txt" \
-      || echo "⚠️  pip install failed: $name"
+      || echo "⚠️  pip install reqs failed: $name"
   fi
 done
-echo "✅ Custom nodes installation complete."
+echo "✅ Custom nodes installed."
 
 # =============================================================================
-# 6) Download FP8 models (16‑way parallel with aria2)
+# 7) Download FP8 models (16‑way parallel with aria2)
 # =============================================================================
-echo "==> Downloading FP8 model set..."
+echo "==> Downloading FP8 models..."
 declare -A MODELS=(
   ["models/loras/FLUX.1-Turbo-Alpha.safetensors"]="https://huggingface.co/alimama-creative/FLUX.1-Turbo-Alpha/resolve/main/diffusion_pytorch_model.safetensors?download=true"
   ["models/clip/clip_l.safetensors"]="https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/clip_l.safetensors?download=true"
@@ -84,12 +94,12 @@ for subpath in "${!MODELS[@]}"; do
   else
     echo "→ Downloading $file"
     aria2c -x16 -s16 -d "$dest_dir" -o "$file" "$url" \
-      || echo "⚠️  failed to download: $file"
+      || echo "⚠️  download failed: $file"
   fi
 done
-echo "✅ FP8 model download complete."
+echo "✅ FP8 models downloaded."
 
 # =============================================================================
-# 7) Done
+# 8) Finished
 # =============================================================================
-echo "All done! ComfyUI nodes & FP8 models are installed in $COMFYUI_DIR."
+echo "All done! ComfyUI custom nodes and FP8 models are in $COMFYUI_DIR."

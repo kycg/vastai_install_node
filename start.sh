@@ -46,10 +46,40 @@ CONTROLNET_MODELS=(
 )
 
 ### DO NOT EDIT BELOW HERE UNLESS YOU KNOW WHAT YOU ARE DOING ###
+# 是否自动升级 ComfyUI 核心；设为 false 可关闭
+: "${COMFY_AUTO_UPDATE:=true}"
+function provisioning_update_comfyui() {
+    if [[ ${COMFY_AUTO_UPDATE,,} == "false" ]]; then
+        printf "Skipping ComfyUI core update (COMFY_AUTO_UPDATE=false)\n"
+        return 0
+    fi
+
+    if [[ -d "${COMFYUI_DIR}/.git" ]]; then
+        printf "Updating ComfyUI core at %s ...\n" "${COMFYUI_DIR}"
+        ( cd "${COMFYUI_DIR}" && \
+          git pull --rebase --autostash && \
+          git submodule update --init --recursive )
+    else
+        printf "Cloning ComfyUI core into %s ...\n" "${COMFYUI_DIR}"
+        mkdir -p "$(dirname "${COMFYUI_DIR}")"
+        git clone --recursive https://github.com/comfyanonymous/ComfyUI "${COMFYUI_DIR}"
+    fi
+
+    if [[ -f "${COMFYUI_DIR}/requirements.txt" ]]; then
+        # 可选：升级安装工具，减少依赖编译坑
+        python -m pip install --upgrade pip wheel setuptools
+        pip install --no-cache-dir -r "${COMFYUI_DIR}/requirements.txt"
+    fi
+}
 
 function provisioning_start() {
     provisioning_print_header
     provisioning_get_apt_packages
+
+    # 先升级/安装 ComfyUI 核心
+    provisioning_update_comfyui
+
+
     provisioning_get_nodes
     provisioning_get_pip_packages
     provisioning_get_files \
